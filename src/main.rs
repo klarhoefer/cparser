@@ -23,7 +23,7 @@ impl<'a> Iterator for Tokenizer<'a> {
         if self.line.len() > 0 {
             for (i, c) in self.line.chars().enumerate() {
                 match c {
-                    ';' | ',' | '(' | ')' | '{' | '}' | '[' | ']' | '*' | '&' | ' ' | '\t' | '-' | '+' => {
+                    ';' | ',' | '(' | ')' | '{' | '}' | '[' | ']' | '*' | '&' | ' ' | '\t' | '-' | '+' | '<' | '>' | ':' | '?' | '=' | '|' => {
                         let pos = if i == 0 {
                             1
                         } else {
@@ -45,10 +45,17 @@ impl<'a> Iterator for Tokenizer<'a> {
     }
 }
 
+#[derive(Debug)]
+enum Token {
+    Reserved(String),
+    Identifier(String),
+    Operator(String),
+}
 
 fn parse<P: AsRef<Path>>(path: P) -> io::Result<()> {
     let file = File::open(path)?;
     let reader = io::BufReader::new(file);
+
     for line in reader.lines() {
         let line = line?;
         let trimmed = line.trim();
@@ -60,14 +67,22 @@ fn parse<P: AsRef<Path>>(path: P) -> io::Result<()> {
             continue;
         }
 
-        print!("{} |", line.trim_end());
-
         let tokenizer = Tokenizer::new(&trimmed);
         for token in tokenizer {
-            print!(" ~{}~", token);
+            let token = match token {
+                "typedef" | "struct" | "union" | "for" | "while" | "if" | "extern" | "sizeof" | "enum" |
+                    "void" | "int" | "double" | "float" | "unsigned" | "char" | "const" | "long" | "short" => Token::Reserved(token.into()),
+                "*" | ";" | "!" | "(" | ")" | "{" | "}" | "[" | "]" | "," | "=" => Token::Operator(token.into()),
+                _ => Token::Identifier(token.into()),
+            };
+            match token {
+                Token::Identifier(s) => {
+                    println!("\"{}\"", s);
+                },
+                _ => (),
+            }
         }
 
-        println!();
     }
 
     Ok(())
