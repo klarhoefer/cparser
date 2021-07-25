@@ -7,43 +7,193 @@ use std::fs::File;
 
 struct Tokenizer<'a> {
     line: &'a str,
+    text: &'a [u8],
+    last: usize,
+    pos: usize
+}
+
+fn is_whitespace(b: u8) -> bool {
+    b == b' ' || b == b'\t'
 }
 
 impl<'a> Tokenizer<'a> {
+
     fn new(line: &'a str) -> Self {
-        Tokenizer { line }
+        let text = line.as_bytes();
+        Tokenizer { line, text, last: 0, pos: 0 }
     }
 
+    fn available(&self) -> bool {
+        self.pos < self.text.len()
+    }
+
+    fn step(&mut self) {
+        self.pos += 1;
+    }
+
+    fn current(&self) -> Option<u8> {
+        if self.available() {
+            Some(self.text[self.pos])
+        } else {
+            None
+        }
+    }
+
+    fn peek(&self) -> Option<u8> {
+        if self.pos + 1 < self.text.len() {
+            Some(self.text[self.pos + 1])
+        } else {
+            None
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while let Some(b) = self.current() {
+            if is_whitespace(b) {
+                self.step();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn slice(&self) -> &'a str {
+        &self.line[self.last..self.pos]
+    }
+
+    fn identifier(&mut self) -> &'a str {
+        while let Some(b) = self.current() {
+            match b {
+                b'_' | b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' => self.step(),
+                _ => break,
+            }
+        }
+
+        self.slice()
+    }
+
+    fn number(&mut self) -> &'a str {
+        while let Some(b) = self.current() {
+            match b {
+                b'0'..=b'9' | b'.' => self.step(),
+                _ => break,
+            }
+        }
+
+        self.slice()
+    }
+
+    fn character(&mut self) -> &'a str {
+        let mut mask = false;
+        while let Some(b) = self.current() {
+            self.step();
+
+            match b {
+                b'\\' => mask = true,
+                _ if mask => mask = false,
+                b'\'' => return self.slice(),
+                _ => (),
+            }
+        }
+        unreachable!()
+    }
+
+    fn string(&mut self) -> &'a str {
+        let mut mask = false;
+        while let Some(b) = self.current() {
+            self.step();
+
+            match b {
+                b'\\' => mask = true,
+                _ if mask => mask = false,
+                b'\"' => return self.slice(),
+                _ => (),
+            }
+        }
+        unreachable!()
+    }
 }
+
 
 impl<'a> Iterator for Tokenizer<'a> {
     type Item = &'a str;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.line.len() > 0 {
-            for (i, c) in self.line.chars().enumerate() {
-                match c {
-                    ';' | ',' | '(' | ')' | '{' | '}' | '[' | ']' | '*' | '&' | ' ' | '\t' | '-' | '+' | '<' | '>' | ':' | '?' | '=' | '|' => {
-                        let pos = if i == 0 {
-                            1
-                        } else {
-                            i
-                        };
-                        let res = &self.line[..pos];
-                        self.line = &self.line[pos..].trim_start();
-                        return Some(res);
-                    },
-                    _ => (),
-                }
+        self.skip_whitespace();
+
+        self.last = self.pos;
+
+        if let Some(b) = self.current() {
+            self.step();
+
+            match b {
+                b';' | b',' | b'{' | b'}' | b'[' | b']' | b'(' | b')' | b'?' | b':' => return Some(self.slice()),
+                b'_' | b'a'..=b'z' | b'A'..=b'Z' => return Some(self.identifier()),
+                b'*' => {
+                    match self.peek() {
+                        Some(b'=') => {
+                            self.step();
+                        },
+                        _ => (),
+                    }
+                    return Some(self.slice());
+                },
+                b'-' => {
+                    match self.peek() {
+                        Some(b'>') | Some(b'-') | Some(b'=') => {
+                            self.step();
+                        },
+                        _ => (),
+                    }
+                    return Some(self.slice());
+                },
+                b'+' => {
+                    match self.peek() {
+                        Some(b'+') | Some(b'=') => {
+                            self.step();
+                        },
+                        _ => (),
+                    }
+                    return Some(self.slice());
+                },
+                b'=' => {
+                    match self.peek() {
+                        Some(b'=') => {
+                            self.step();
+                        },
+                        _ => (),
+                    }
+                    return Some(self.slice());
+                },
+                b'&' => {
+                    match self.peek() {
+                        Some(b'=') | Some(b'&') => {
+                            self.step();
+                        },
+                        _ => (),
+                    }
+                    return Some(self.slice());
+                },
+                b'|' => {
+                    match self.peek() {
+                        Some(b'=') | Some(b'|') => {
+                            self.step();
+                        },
+                        _ => (),
+                    }
+                    return Some(self.slice());
+                },
+                b'.' | b'^' => return Some(self.slice()),
+                b'0'..=b'9' => return Some(self.number()),
+                b'"' => return Some(self.string()),
+                b'\'' => return Some(self.character()),
+                _ => unreachable!(),
             }
-            let res = self.line;
-            self.line = "";
-            Some(res)
-        } else {
-            None
         }
+        None
     }
 }
+
 
 #[derive(Debug)]
 enum Token {
@@ -67,21 +217,25 @@ fn parse<P: AsRef<Path>>(path: P) -> io::Result<()> {
             continue;
         }
 
+        print!("{} |", line.trim_end());
+
         let tokenizer = Tokenizer::new(&trimmed);
         for token in tokenizer {
-            let token = match token {
-                "typedef" | "struct" | "union" | "for" | "while" | "if" | "extern" | "sizeof" | "enum" |
-                    "void" | "int" | "double" | "float" | "unsigned" | "char" | "const" | "long" | "short" => Token::Reserved(token.into()),
-                "*" | ";" | "!" | "(" | ")" | "{" | "}" | "[" | "]" | "," | "=" => Token::Operator(token.into()),
-                _ => Token::Identifier(token.into()),
-            };
-            match token {
-                Token::Identifier(s) => {
-                    println!("\"{}\"", s);
-                },
-                _ => (),
-            }
+            print!(" ~{}~", token);
+            // let token = match token {
+            //     "typedef" | "struct" | "union" | "for" | "while" | "if" | "extern" | "sizeof" | "enum" |
+            //         "void" | "int" | "double" | "float" | "unsigned" | "char" | "const" | "long" | "short" => Token::Reserved(token.into()),
+            //     "*" | ";" | "!" | "(" | ")" | "{" | "}" | "[" | "]" | "," | "=" => Token::Operator(token.into()),
+            //     _ => Token::Identifier(token.into()),
+            // };
+            // match token {
+            //     Token::Identifier(s) => {
+            //         println!("\"{}\"", s);
+            //     },
+            //     _ => (),
+            // }
         }
+        println!();
 
     }
 
